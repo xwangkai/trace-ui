@@ -209,9 +209,10 @@ impl TraceEngine {
         }
 
         let mode = parse_search_mode(query, options.case_sensitive, options.use_regex, options.fuzzy)?;
-        let paginated = options.max_results.is_none();
+        //let paginated = options.max_results.is_none();
+        let paginated = options.cache || options.max_results.is_none();
         let max_results = if paginated { usize::MAX } else { options.max_results.unwrap() as usize };
-
+        
         let num_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
