@@ -71,6 +71,8 @@ pub struct SearchInstructionsRequest {
     pub seq_range: Option<String>,
     #[schemars(description = "Filter results by SO offset address range, e.g. '0x246F00-0x249800'")]
     pub addr_range: Option<String>,
+    pub cache: Option<bool>,
+    pub seq_offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
