@@ -172,6 +172,8 @@ pub async fn search_trace(
                 use_regex: request.use_regex,
                 fuzzy: request.fuzzy,
                 max_results: request.max_results,
+                cache: false,       // ← 加这行
+                seq_offset: None,   // ← 加这行
             },
         ).map_err(|e| e.to_string())
     })
