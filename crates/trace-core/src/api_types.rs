@@ -83,6 +83,8 @@ pub struct SearchOptions {
     pub use_regex: bool,
     pub fuzzy: bool,
     pub max_results: Option<u32>,
+    pub cache: bool,
+    pub seq_offset: Option<usize>,
 }
 
 #[derive(Serialize)]
