@@ -311,6 +311,7 @@ impl TraceToolHandler {
                     fuzzy: false,
                     max_results: Some(max),
                     cache: use_cache,
+                    seq_offset: None,  // ← 加这行
                 };
                 let result = engine
                     .search(&sid, &req.query, options)
