@@ -293,64 +293,107 @@ impl TraceToolHandler {
         let engine = self.engine.clone();
         blocking(move || {
             let max = req.max_results.unwrap_or(DEFAULT_SEARCH).min(MAX_SEARCH);
-            let options = SearchOptions {
-                case_sensitive: req.case_sensitive,
-                use_regex: req.use_regex,
-                fuzzy: false,
-                max_results: Some(max),
-            };
-            let result = engine.search(&sid, &req.query, options)
-                .map_err(|e| e.to_string())?;
+            let use_cache = req.cache.unwrap_or(false);
+            let offset = req.seq_offset.unwrap_or(0);
 
-            // seq range filter
+            // 获取本页 match_seqs
+            let (base_seqs, total_matches, total_scanned) = if use_cache && offset > 0 {
+                // cache=true 且非第一页：直接从缓存取，不重新搜索
+                let (_, page) = engine
+                    .fetch_search_page(&sid, offset, max)
+                    .map_err(|e| e.to_string())?;
+                (page, 0u32, 0u32)
+            } else {
+                // 第一页，或 cache=false：执行搜索
+                let options = SearchOptions {
+                    case_sensitive: req.case_sensitive,
+                    use_regex: req.use_regex,
+                    fuzzy: false,
+                    max_results: Some(max),
+                    cache: use_cache,
+                };
+                let result = engine
+                    .search(&sid, &req.query, options)
+                    .map_err(|e| e.to_string())?;
+    
+                let seqs = if use_cache {
+                    // cache=true：search 已缓存全量，从缓存取第一页保持与后续页逻辑一致
+                    let (_, page) = engine
+                        .fetch_search_page(&sid, 0, max)
+                        .map_err(|e| e.to_string())?;
+                    page
+                } else {
+                    // cache=false：直接用 search 返回的结果
+                    result.match_seqs.into_iter().take(max as usize).collect()
+                };
+    
+                (seqs, result.total_matches, result.total_scanned)
+            };
+            
+            // seq_range filter
             let filtered_seqs: Vec<u32> = if let Some(ref range) = req.seq_range {
                 let (start, end) = parse_seq_range(range)?;
-                result.match_seqs.iter()
+                base_seqs
+                    .iter()
                     .copied()
                     .filter(|&seq| seq >= start && seq <= end)
                     .collect()
             } else {
-                result.match_seqs.clone()
+                base_seqs
             };
-
             let total_after_seq_filter = filtered_seqs.len();
-
-            // Load lines (take more than needed to handle addr_range filtering)
-            let load_count = if req.addr_range.is_some() { (max as usize) * 3 } else { max as usize };
-            let preview_seqs: Vec<u32> = filtered_seqs.iter().copied().take(load_count).collect();
-            let lines = engine.get_lines(&sid, &preview_seqs)
+    
+            // Load lines
+            let load_count = if req.addr_range.is_some() {
+                (max as usize) * 3
+            } else {
+                max as usize
+            };
+            let preview_seqs: Vec<u32> = filtered_seqs
+                .iter()
+                .copied()
+                .take(load_count)
+                .collect();
+            let lines = engine
+                .get_lines(&sid, &preview_seqs)
                 .map_err(|e| e.to_string())?;
-
+    
             // addr_range filter
             let final_lines: Vec<&TraceLine> = if let Some(ref range) = req.addr_range {
                 let (start, end) = parse_addr_range(range)?;
-                lines.iter()
+                lines
+                    .iter()
                     .filter(|l| line_in_addr_range(l, start, end))
                     .take(max as usize)
                     .collect()
             } else {
                 lines.iter().take(max as usize).collect()
             };
-
+    
             let matches: Vec<serde_json::Value> = if req.full {
-                final_lines.iter().map(|l| serde_json::to_value(l)
-                    .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}))
-                ).collect()
+                final_lines
+                    .iter()
+                    .map(|l| {
+                        serde_json::to_value(l)
+                            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}))
+                    })
+                    .collect()
             } else {
                 final_lines.iter().map(|l| compact_line(l)).collect()
             };
-
+    
             let effective_total = if req.seq_range.is_some() || req.addr_range.is_some() {
                 total_after_seq_filter
             } else {
-                result.total_matches as usize
+                total_matches as usize
             };
 
             Ok(json(&serde_json::json!({
                 "matches": matches,
                 "total_matches": effective_total,
-                "total_scanned": result.total_scanned,
-                "truncated": result.truncated || final_lines.len() < total_after_seq_filter,
+                "total_scanned": total_scanned,
+                "truncated": final_lines.len() < total_after_seq_filter
+                    || (offset == 0 && (effective_total as u32) < total_matches),
             })))
         }).await
     }
